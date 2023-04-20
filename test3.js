@@ -82,6 +82,7 @@ client.on('messageCreate', async (ctx) => {
         console.log('x');
 
         connection.receiver.speaking.on('start', (userId) => {
+          console.log('User started speaking: ', userId);
           const standaloneInput = new AudioMixer.Input({
             channels: 2,
             bitDepth: 16,
@@ -112,34 +113,39 @@ client.on('messageCreate', async (ctx) => {
           rawStream.pipe(fileStream);
 
           const volume = new PCMVolume();
+          const pipedVolume = new PassThrough();
 
           audio.pipe(new Prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 }))
             .pipe(volume)
+            .pipe(pipedVolume)
             .pipe(rawStream);
 
           let silenceDuration = 0;
-          const silenceThreshold = 5000;
-          const silenceSampleThreshold = 0.01;
+          const silenceThreshold = 1000;
+          const silenceSampleThreshold = 0.5;
 
           function calculateRMS(samples){
             const squareSum = samples.reduce((sum, sample) => sum + (sample * sample), 0);
             const meanSquare = squareSum / samples.length;
             return Math.sqrt(meanSquare);}
 
-          volume.on('data', (chunk) => {
-            const isSilent = calculateRMS(chunk) <= silenceSampleThreshold;
+          pipedVolume.on('data', (chunk) => {
+            const samples = new Int16Array(chunk.buffer);
+            const rms = calculateRMS(samples);
+            console.log(`rms: ${rms}`);
+            const isSilent = rms <= silenceSampleThreshold;
 
             if (isSilent) {
               silenceDuration += (chunk.length / 48000) * 1000;
-              console.log(`Silence duration: ${silenceDuration}ms`)
+              console.log(`Silence duration: ${silenceDuration}ms`);
 
-              if (silenceDuration >= silenceThreshold) {
-                console.log(`over`)
-                audio.unpipe();
+              if (silenceDuration >= silenceThreshold){
+                console.log(`over`);
+                audio.unpipe(rawStream);
                 rawStream.unpipe(fileStream);
                 fileStream.end();
 
-                processAudio(userId, audio, player);
+                processAudio(userId ,player);
               }
             } else {
               console.log(`not over`)
@@ -149,19 +155,15 @@ client.on('messageCreate', async (ctx) => {
         });
       }
       break;
-  }
-});
+    }
+  });
 client.login(config.token);
 
-async function processAudio(userId, audio, player) {
+async function processAudio(userId, player) {
   try {
     console.log('Stream ended.');
-    audio.unpipe(rawStream);
 
-    rawStream.unpipe(fileStream);
-    fileStream.end();
-
-    const pcmFilePath = filepath;
+    const pcmFilePath = `./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}.pcm`;
     const wavFilePath = `./audio_file/discord_stream_audio/wav_file/user_audio_${userId}.wav`;
     ensureDirectoryExists(wavFilePath);
     await convertPCMtoWAV(pcmFilePath, wavFilePath);
