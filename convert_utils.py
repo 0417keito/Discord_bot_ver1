@@ -15,7 +15,7 @@ from gtts import gTTS
 
 model_name = "kato_conversation.pth"
 
-OPENAI_KEY = 
+OPENAI_KEY = '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'
 
 import openai
 openai.api_key = OPENAI_KEY
@@ -28,7 +28,6 @@ def whisper(audio_path):
     audio_file = open(audio_path, "rb")
     transcript = openai.Audio.transcribe("whisper-1", audio_file)
     message = transcript['text']
-    print(message)
     return message
 
 
