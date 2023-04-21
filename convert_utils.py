@@ -15,7 +15,7 @@ from gtts import gTTS
 
 model_name = "kato_conversation.pth"
 
-OPENAI_KEY = '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'
+OPENAI_KEY = 'Your OpenAPI Key'
 
 import openai
 openai.api_key = OPENAI_KEY
