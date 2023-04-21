@@ -5,26 +5,18 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const ytdl = require("ytdl-core");
 const wav = require("wav");
 
-
-const PCMVolume = require("pcm-volume");
-
 const { runPythonScript } = require("./run_python");
-const { play_audio } = require("./voice-commands");
-const { end_of_stream } = require("./end_of_stream");
 
-const Discord = require("discord.js");
 const {
   joinVoiceChannel,
   createAudioPlayer,
   createAudioResource,
-  createDiscordJSAdapter,
   EndBehaviorType,
   NoSubscriberBehavior,
   StreamType,
 } = require("@discordjs/voice");
-const opus = require("@discordjs/opus");
+
 const Prism = require("prism-media");
-const AudioMixer = require("audio-mixer");
 
 const client = new Client({
   intents: Object.values(GatewayIntentBits).filter(Number.isInteger), // ALL Intents
@@ -139,7 +131,8 @@ async function processAudio(userId,player,time) {
     const fileStream = fs.createReadStream(pcmFilePath);
     fileStream.pipe(writer);
 
-    await new Promise((resolve) => writer.on("finish", resolve));
+    //await new Promise((resolve) => writer.on("finish", resolve));
+    console.log("Before calling runPythonScript");// このログを追加
 
     await runPythonScript(wavFilePath).then((result) => {
       console.log("Received output file path:", result);
@@ -149,13 +142,14 @@ async function processAudio(userId,player,time) {
       });
       player.play(audioResource);
 
-      player.on("finish", () => {
+      player.on("idle", () => {
         player.stop();
         console.log("finish");
       });
     }).catch((error) => {
       console.log("Error occurred:", error);
     });
+    console.log("After calling runPythonScript"); // このログを追加
   } catch (error) {
     console.error("Error occurred:", error);
   }
