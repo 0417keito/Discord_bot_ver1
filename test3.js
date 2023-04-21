@@ -3,6 +3,8 @@ const path = require("path");
 const { Readable, PassThrough } = require("stream");
 const { Client, GatewayIntentBits } = require("discord.js");
 const ytdl = require("ytdl-core");
+const wav = require("wav");
+
 
 const PCMVolume = require("pcm-volume");
 
@@ -127,19 +129,38 @@ async function processAudio(userId,player,time) {
     console.log("Stream ended.");
 
     const pcmFilePath = path.resolve(`./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}_${time}.pcm`);
-    runPythonScript(pcmFilePath).then((result) => {
+    const wavFilePath = path.resolve(`./audio_file/discord_stream_audio/wav_file/user_audio_${userId}_${time}.wav`);
+
+    const writer = new wav.FileWriter(wavFilePath, {
+      sampleRate: 48000,
+      channels: 2,
+    });
+
+    const fileStream = fs.createReadStream(pcmFilePath);
+    fileStream.pipe(writer);
+
+    await new Promise((resolve) => writer.on("finish", resolve));
+
+    await runPythonScript(wavFilePath).then((result) => {
       console.log("Received output file path:", result);
       const audioFileStream = fs.createReadStream(result);
       const audioResource = createAudioResource(audioFileStream, {
         inputType: StreamType.Arbitrary,
       });
       player.play(audioResource);
+
+      player.on("finish", () => {
+        player.stop();
+        console.log("finish");
+      });
     }).catch((error) => {
       console.log("Error occurred:", error);
     });
 
-    await end_of_stream(player, "finish");
-    player.stop();
+    player.on("finish", () => {
+      player.stop();
+      console.log("finish");
+    });
   } catch (error) {
     console.error("Error occurred:", error);
   }
