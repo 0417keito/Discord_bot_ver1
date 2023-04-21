@@ -156,11 +156,6 @@ async function processAudio(userId,player,time) {
     }).catch((error) => {
       console.log("Error occurred:", error);
     });
-
-    player.on("finish", () => {
-      player.stop();
-      console.log("finish");
-    });
   } catch (error) {
     console.error("Error occurred:", error);
   }
