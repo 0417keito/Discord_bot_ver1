@@ -1,18 +1,16 @@
-const fs = require('fs');
-const path = require('path');
-const { Readable, PassThrough } = require('stream');
-const { Client, GatewayIntentBits } = require('discord.js');
-const ytdl = require('ytdl-core');
+const fs = require("fs");
+const path = require("path");
+const { Readable, PassThrough } = require("stream");
+const { Client, GatewayIntentBits } = require("discord.js");
+const ytdl = require("ytdl-core");
 
-const PCMVolume = require('pcm-volume');
+const PCMVolume = require("pcm-volume");
 
+const { runPythonScript } = require("./run_python");
+const { play_audio } = require("./voice-commands");
+const { end_of_stream } = require("./end_of_stream");
 
-const { runPythonScript } = require('./run_python');
-const { play_audio } = require('./voice-commands');
-const { convertPCMtoWAV } = require('./pcm2wav');
-const { end_of_stream } = require('./end_of_stream');
-
-const Discord = require('discord.js');
+const Discord = require("discord.js");
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -21,39 +19,45 @@ const {
   EndBehaviorType,
   NoSubscriberBehavior,
   StreamType,
-} = require('@discordjs/voice');
-const opus = require('@discordjs/opus');
-const Prism = require('prism-media');
-const AudioMixer = require('audio-mixer');
-
-//const client = new Discord.Client();
+} = require("@discordjs/voice");
+const opus = require("@discordjs/opus");
+const Prism = require("prism-media");
+const AudioMixer = require("audio-mixer");
 
 const client = new Client({
-  intents: Object.values(GatewayIntentBits).filter(Number.isInteger) // ALL Intents
+  intents: Object.values(GatewayIntentBits).filter(Number.isInteger), // ALL Intents
 });
 
-// Noiseless stream of audio to send when the bot joins a voice channel
 class Silence extends Readable {
   _read() {
     this.push(Buffer.from([0xF8, 0xFF, 0xFE]));
   }
 }
 
-const config = JSON.parse(fs.readFileSync('config.json'));
+const config = JSON.parse(fs.readFileSync("config.json"));
 
-client.on('ready', () => {
+client.on("ready", () => {
   console.log(`Up and running.`);
 });
 
-client.on('messageCreate', async (ctx) => {
+const silenceTimeouts = {};
+
+function handleSilenceTimeout(userId,player,time,) {
+  console.log("Silence duration reached. Stopping recording.");
+  clearTimeout(silenceTimeouts[userId]);
+  silenceTimeouts[userId] = null;
+  processAudio(userId, player, time);
+}
+
+client.on("messageCreate", async (ctx) => {
   if (!ctx.content.startsWith(config.prefix)) return;
 
-  const command = ctx.content.slice(config.prefix.length).split(' ');
+  const command = ctx.content.slice(config.prefix.length).split(" ");
 
   switch (command[0]) {
-    case 'join':
-      console.log('join');
-      client.on('debug', console.log);
+    case "join":
+      console.log("join");
+      client.on("debug", console.log);
       if (ctx.member.voice.channelId) {
         const channel = await client.channels.fetch(ctx.member.voice.channelId);
 
@@ -65,9 +69,8 @@ client.on('messageCreate', async (ctx) => {
           selfDeaf: false,
         });
 
-        console.log('connection');
+        console.log("connection");
 
-        // Create an AudioPlayer instance and play the Silence stream
         const player = createAudioPlayer({
           behaviors: { noSubscriber: NoSubscriberBehavior.Play },
         });
@@ -76,108 +79,75 @@ client.on('messageCreate', async (ctx) => {
         const silenceResource = createAudioResource(new Silence(), { inputType: StreamType.Opus });
         player.play(silenceResource);
 
-        console.log('y');
+        console.log("y");
 
         ctx.channel.send("I'm listening.. My hotword is **bumblebee**.");
-        console.log('x');
+        console.log("x");
 
-        connection.receiver.speaking.on('start', (userId) => {
-          console.log('User started speaking: ', userId);
-          const standaloneInput = new AudioMixer.Input({
-            channels: 2,
-            bitDepth: 16,
-            sampleRate: 48000,
-            volume: 100,
-          });
-
-          const audio = connection.receiver.subscribe(userId, {
-            end: { behavior: EndBehaviorType.AfterSilence },
-          });
-          const rawStream = new PassThrough();
-          audio.pipe(new Prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 })).pipe(rawStream);
-
-          const resource = createAudioResource(rawStream, {
-            inputType: StreamType.Raw,
-          });
-
-          function ensureDirectoryExists(filepath) {
-            const dir = path.dirname(filepath);
-            if (!fs.existsSync(dir)) {
-              fs.mkdirSync(dir, { recursive: true });
-            }
+        connection.receiver.speaking.on("start", (userId) => {
+          console.log("User started speaking: ", userId);
+          if (silenceTimeouts[userId]) {
+            clearTimeout(silenceTimeouts[userId]);
+            silenceTimeouts[userId] = null;
           }
 
-          const filepath = `./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}.pcm`;
+          const audio = connection.receiver.subscribe(userId, {
+            end: { behavior: EndBehaviorType.AfterSilence, duration: 5000 },
+          });
+          const rawStream = new PassThrough();
+          const time = Date.now();
+          const filepath = `./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}_${time}.pcm`;
           ensureDirectoryExists(filepath);
           const fileStream = fs.createWriteStream(filepath);
-          rawStream.pipe(fileStream);
 
-          const volume = new PCMVolume();
-          const pipedVolume = new PassThrough();
+          audio.pipe(new Prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 })).pipe(rawStream).pipe(fileStream);
 
-          audio.pipe(new Prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 }))
-            .pipe(volume)
-            .pipe(pipedVolume)
-            .pipe(rawStream);
-
-          let silenceDuration = 0;
-          const silenceThreshold = 1000;
-          const silenceSampleThreshold = 0.5;
-
-          function calculateRMS(samples){
-            const squareSum = samples.reduce((sum, sample) => sum + (sample * sample), 0);
-            const meanSquare = squareSum / samples.length;
-            return Math.sqrt(meanSquare);}
-
-          pipedVolume.on('data', (chunk) => {
-            const samples = new Int16Array(chunk.buffer);
-            const rms = calculateRMS(samples);
-            console.log(`rms: ${rms}`);
-            const isSilent = rms <= silenceSampleThreshold;
-
-            if (isSilent) {
-              silenceDuration += (chunk.length / 48000) * 1000;
-              console.log(`Silence duration: ${silenceDuration}ms`);
-
-              if (silenceDuration >= silenceThreshold){
-                console.log(`over`);
-                audio.unpipe(rawStream);
-                rawStream.unpipe(fileStream);
-                fileStream.end();
-
-                processAudio(userId ,player);
-              }
-            } else {
-              console.log(`not over`)
-              silenceDuration = 0;
-            }
+          connection.receiver.speaking.on("end", (userId) => {
+            audio.unpipe(rawStream);
+            rawStream.unpipe(fileStream);    
+            fileStream.end();
+            console.log("User stopped speaking: ", userId);
+            silenceTimeouts[userId] = setTimeout(
+              () => handleSilenceTimeout(userId,player,time),
+              5000 // 無音期間の duration (ミリ秒)
+            );
+            console.log("over");
           });
         });
       }
       break;
-    }
-  });
+  }
+});
 client.login(config.token);
 
-async function processAudio(userId, player) {
+  
+
+async function processAudio(userId,player,time) {
   try {
-    console.log('Stream ended.');
+    console.log("Stream ended.");
 
-    const pcmFilePath = `./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}.pcm`;
-    const wavFilePath = `./audio_file/discord_stream_audio/wav_file/user_audio_${userId}.wav`;
-    ensureDirectoryExists(wavFilePath);
-    await convertPCMtoWAV(pcmFilePath, wavFilePath);
-    await runPythonScript(wavFilePath);
-    const outputWavFilePath = './audio_file/output_audio/output.wav';
-    const readStream = fs.createReadStream(outputWavFilePath);
-    const audioResource = createAudioResource(readStream, {
-      inputType: StreamType.Arbitrary,
+    const pcmFilePath = path.resolve(`./audio_file/discord_stream_audio/pcm_file/user_audio_${userId}_${time}.pcm`);
+    runPythonScript(pcmFilePath).then((result) => {
+      console.log("Received output file path:", result);
+      const audioFileStream = fs.createReadStream(result);
+      const audioResource = createAudioResource(audioFileStream, {
+        inputType: StreamType.Arbitrary,
+      });
+      player.play(audioResource);
+    }).catch((error) => {
+      console.log("Error occurred:", error);
     });
-    player.play(audioResource);
 
-    await end_of_stream(player, 'finish');
+    await end_of_stream(player, "finish");
     player.stop();
   } catch (error) {
-    console.error('Error occurred:', error);
+    console.error("Error occurred:", error);
   }
 }
+
+function ensureDirectoryExists(filepath) {
+    const dir = path.dirname(filepath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
